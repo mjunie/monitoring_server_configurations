@@ -1,0 +1,15 @@
+domains:
+  - grafana.m2.horizonoes.com
+  - prometheus.m2.horizonoes.com
+  - jaeger.m2.horizonoes.com
+  - loki.m2.horizonoes.com
+
+backends:
+  grafana.m2.horizonoes.com: "http://127.0.0.1:3000"
+  prometheus.m2.horizonoes.com: "http://127.0.0.1:9090"
+  jaeger.m2.horizonoes.com: "http://127.0.0.1:16686"
+  loki.m2.horizonoes.com: "http://127.0.0.1:3100"
+
+# Control certbot execution
+run_certbot: false
+certbot_email: junie@ranites.com

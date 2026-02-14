@@ -1,0 +1,26 @@
+- name: Install Java
+  apt:
+    name: openjdk-17-jdk
+    state: present
+    update_cache: yes
+
+- name: Download OpenSearch
+  get_url:
+    url: https://artifacts.opensearch.org/releases/bundle/opensearch/{{ opensearch_version }}/opensearch-{{ opensearch_version }}-linux-x64.deb
+    dest: /tmp/opensearch.deb
+
+- name: Install OpenSearch
+  apt:
+    deb: /tmp/opensearch.deb
+
+- name: Configure OpenSearch
+  template:
+    src: opensearch.yml.j2
+    dest: /etc/opensearch/opensearch.yml
+  notify: restart opensearch
+
+- name: Enable and start OpenSearch
+  systemd:
+    name: opensearch
+    enabled: yes
+    state: started

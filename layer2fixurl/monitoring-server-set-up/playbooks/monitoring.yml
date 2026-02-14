@@ -1,0 +1,37 @@
+---
+- name: Deploy Complete Monitoring Stack
+  hosts: all
+  become: yes
+
+  vars:
+    jaeger_container_name: "books_jaeger"
+    jaeger_docker_network: "books_application_loki_books-network"
+    prometheus_endpoint: "http://172.17.0.1:9090"
+    jaeger_config_dir: "/home/vagrant/jaegerf"
+  
+  tasks:
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Install required packages
+      apt:
+        name:
+          - curl
+          - wget
+          - tar
+          - unzip
+          - software-properties-common
+        state: present
+    
+
+  roles:
+    # - node_exporter
+    # - prometheus
+    # - loki
+    # - promtail
+    # - grafana
+    # - opensearch
+    - jaeger-spm
+    # - opentelemetry

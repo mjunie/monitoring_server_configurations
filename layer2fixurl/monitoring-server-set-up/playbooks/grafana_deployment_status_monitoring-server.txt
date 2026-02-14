@@ -1,0 +1,26 @@
+Grafana Deployment Status
+=========================
+Deployment Date: 2026-01-27T10:53:56Z
+Grafana Version: unknown
+
+Access Information:
+- URL: http://192.168.121.133:3000
+- Admin User: admin
+
+Prometheus Datasource:
+- UID: prometheus
+
+Dashboard Configuration:
+- Folder: Infrastructure
+- Dashboards: Node Exporter Full, PostgreSQL Database
+
+Alert Rules Configuration:
+- Folder: Infrastructure
+- Groups: infrastructure_system_alerts, infrastructure_database_alerts
+
+To fix 'no data' in alerts:
+1. Note the Prometheus UID above
+2. Update your inventory/group_vars with:
+   grafana_prometheus_uid: 'prometheus'
+3. Ensure alert_rules.yml.j2 uses: datasourceUid: {{ grafana_prometheus_uid }}
+4. Redeploy the playbook

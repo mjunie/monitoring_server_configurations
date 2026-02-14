@@ -1,0 +1,6 @@
+# PostgreSQL Configuration
+postgres_version: "15"
+postgres_password: "qwerty123"
+postgres_db: "expressdb"
+postgres_user: "postgres"
+postgres_listen_addresses: "localhost"

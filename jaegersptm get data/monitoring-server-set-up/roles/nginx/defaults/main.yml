@@ -1,0 +1,3 @@
+---
+nginx_proxy_pass: "http://localhost:3100"
+nginx_server_name: "_"

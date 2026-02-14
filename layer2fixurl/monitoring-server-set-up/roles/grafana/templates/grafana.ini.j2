@@ -1,0 +1,31 @@
+
+[server]
+http_addr = 0.0.0.0
+http_port = {{ grafana_port }}
+
+[security]
+admin_user = {{ grafana_admin_user }}
+admin_password = {{ grafana_admin_password }}
+
+#################################### SMTP ####################################
+[smtp]
+enabled = {{ grafana_smtp_enabled | default(false) | lower }}
+{% if grafana_smtp_enabled | default(false) %}
+host = {{ grafana_smtp_host }}
+user = {{ grafana_smtp_user }}
+password = {{ grafana_smtp_password }}
+from_address = {{ grafana_smtp_from_address }}
+from_name = {{ grafana_smtp_from_name | default('Grafana') }}
+skip_verify = false
+startTLS_policy = Mandatory
+{% endif %}
+
+[unified_alerting]
+enabled = true
+
+[alerting]
+enabled = false
+
+
+
+

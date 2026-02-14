@@ -1,0 +1,6 @@
+---
+- name: restart jaeger
+  docker_container:
+    name: "{{ jaeger_container_name }}"
+    state: started
+    restart: true

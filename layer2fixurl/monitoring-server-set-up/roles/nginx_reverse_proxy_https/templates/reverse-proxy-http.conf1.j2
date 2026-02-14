@@ -1,0 +1,52 @@
+# HTTPS Reverse proxy configuration — uses wildcard cert for all domains
+
+{% for domain in domains %}
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name {{ domain }};
+
+    ssl_certificate /etc/letsencrypt/live/{{ wildcard_domain }}/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/{{ wildcard_domain }}/privkey.pem;
+
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers HIGH:!aNULL:!MD5;
+    ssl_prefer_server_ciphers on;
+
+    error_page 404 /404.html;
+    error_page 500 502 503 504 /50x.html;
+
+    location = /404.html {
+        root /usr/share/nginx/html;
+        internal;
+    }
+
+    location = /50x.html {
+        root /usr/share/nginx/html;
+        internal;
+    }
+
+    location / {
+        proxy_pass {{ backends[domain] }};
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $server_name;
+        proxy_redirect off;
+
+        proxy_connect_timeout 60s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
+
+        proxy_intercept_errors on;
+    }
+}
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name {{ domain }};
+    return 301 https://$host$request_uri;
+}
+{% endfor %}

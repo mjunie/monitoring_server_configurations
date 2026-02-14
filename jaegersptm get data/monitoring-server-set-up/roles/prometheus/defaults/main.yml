@@ -1,0 +1,7 @@
+# Prometheus Configuration
+prometheus_version: "2.48.0"
+prometheus_port: 9090
+prometheus_data_dir: /var/lib/prometheus
+prometheus_config_dir: /etc/prometheus
+prometheus_retention: "15d"
+node_exporter_port: 9100

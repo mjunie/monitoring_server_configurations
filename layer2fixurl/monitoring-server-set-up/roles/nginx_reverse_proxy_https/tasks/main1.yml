@@ -1,0 +1,228 @@
+---
+# Install nginx, openssl, certbot
+- name: Install nginx, openssl, certbot
+  apt:
+    name:
+      - nginx
+      - openssl
+      - certbot
+      - python3-certbot-nginx
+    state: present
+    update_cache: yes
+
+- name: Enable and start nginx
+  systemd:
+    name: nginx
+    state: started
+    enabled: yes
+
+# Create SSL directory
+- name: Create SSL directory
+  file:
+    path: /etc/nginx/ssl
+    state: directory
+    mode: '0755'
+
+# Deploy custom error pages
+- name: Deploy custom 404 page
+  copy:
+    src: 404.html
+    dest: /usr/share/nginx/html/404.html
+    mode: '0644'
+
+# Check cert status early — drives all conditional logic below
+- name: Check if wildcard cert exists
+  stat:
+    path: "/etc/letsencrypt/live/{{ wildcard_domain }}/fullchain.pem"
+  register: wildcard_cert
+
+# -----------------------------------------------------------------------
+# FULL WIPE of sites-available and sites-enabled.
+# Certbot injects SSL blocks directly into existing config files, so
+# grep-based cleanup is unreliable. We own these directories entirely —
+# wipe them and redeploy only what we want.
+# -----------------------------------------------------------------------
+- name: Wipe all files in sites-enabled
+  shell: "rm -f /etc/nginx/sites-enabled/*"
+  changed_when: true
+
+- name: Wipe all files in sites-available
+  shell: "rm -f /etc/nginx/sites-available/*"
+  changed_when: true
+
+# -----------------------------------------------------------------------
+# PRE-CERTBOT: deploy only HTTP configs (zero SSL cert references)
+# -----------------------------------------------------------------------
+- name: Deploy HTTP reverse proxy config
+  template:
+    src: reverse-proxy-http.conf.j2
+    dest: /etc/nginx/sites-available/reverse-proxy.conf
+    mode: '0644'
+
+- name: Enable HTTP reverse proxy site
+  file:
+    src: /etc/nginx/sites-available/reverse-proxy.conf
+    dest: /etc/nginx/sites-enabled/reverse-proxy.conf
+    state: link
+
+- name: Deploy catch-all (pre-certbot — ssl_reject_handshake, no cert needed)
+  copy:
+    dest: /etc/nginx/sites-available/000-default-catch-all.conf
+    mode: '0644'
+    content: |
+      server {
+          listen 80 default_server;
+          listen [::]:80 default_server;
+          server_name _;
+
+          error_page 404 /404.html;
+          location = /404.html {
+              root /usr/share/nginx/html;
+              internal;
+          }
+
+          location / {
+              return 404;
+          }
+      }
+
+      server {
+          listen 443 ssl default_server;
+          listen [::]:443 ssl default_server;
+          server_name _;
+          ssl_reject_handshake on;
+      }
+  when: not wildcard_cert.stat.exists
+
+- name: Enable catch-all
+  file:
+    src: /etc/nginx/sites-available/000-default-catch-all.conf
+    dest: /etc/nginx/sites-enabled/000-default-catch-all.conf
+    state: link
+
+- name: Test nginx config before certbot
+  command: nginx -t
+  changed_when: false
+
+- name: Reload nginx (before certbot)
+  systemd:
+    name: nginx
+    state: reloaded
+
+# -----------------------------------------------------------------------
+# CERTBOT — DNS-01 challenge for wildcard cert
+# -----------------------------------------------------------------------
+- name: Install certbot DNS plugin
+  apt:
+    name: "python3-certbot-{{ certbot_dns_plugin }}"
+    state: present
+  when: run_certbot | bool
+
+- name: Obtain wildcard certificate via DNS challenge
+  command: >
+    certbot certonly
+    --{{ certbot_dns_plugin }}
+    --{{ certbot_dns_plugin }}-credentials {{ certbot_dns_credentials }}
+    --non-interactive
+    --agree-tos
+    --email {{ certbot_email }}
+    -d {{ wildcard_domain }}
+    -d "*.{{ wildcard_domain }}"
+  args:
+    creates: "/etc/letsencrypt/live/{{ wildcard_domain }}/fullchain.pem"
+  when: run_certbot | bool
+  register: certbot_wildcard_out
+
+- name: Show certbot output
+  debug:
+    var: certbot_wildcard_out.stdout_lines
+  when: run_certbot | bool and certbot_wildcard_out.changed
+
+# -----------------------------------------------------------------------
+# STAGE 2 — post-certbot (only runs when cert file is present on disk)
+# -----------------------------------------------------------------------
+- name: Re-check wildcard cert after certbot
+  stat:
+    path: "/etc/letsencrypt/live/{{ wildcard_domain }}/fullchain.pem"
+  register: wildcard_cert_post
+
+- name: Deploy HTTPS reverse proxy config (wildcard cert)
+  template:
+    src: reverse-proxy-https.conf.j2
+    dest: /etc/nginx/sites-available/reverse-proxy-ssl.conf
+    mode: '0644'
+  when: wildcard_cert_post.stat.exists
+
+- name: Enable HTTPS reverse proxy site
+  file:
+    src: /etc/nginx/sites-available/reverse-proxy-ssl.conf
+    dest: /etc/nginx/sites-enabled/reverse-proxy-ssl.conf
+    state: link
+  when: wildcard_cert_post.stat.exists
+
+- name: Deploy catch-all (post-certbot — wildcard cert serves 404 for unknown subdomains)
+  copy:
+    dest: /etc/nginx/sites-available/000-default-catch-all.conf
+    mode: '0644'
+    content: |
+      server {
+          listen 80 default_server;
+          listen [::]:80 default_server;
+          server_name _;
+          return 301 https://$host$request_uri;
+      }
+
+      server {
+          listen 443 ssl default_server;
+          listen [::]:443 ssl default_server;
+          server_name _;
+
+          ssl_certificate /etc/letsencrypt/live/{{ wildcard_domain }}/fullchain.pem;
+          ssl_certificate_key /etc/letsencrypt/live/{{ wildcard_domain }}/privkey.pem;
+
+          ssl_protocols TLSv1.2 TLSv1.3;
+          ssl_ciphers HIGH:!aNULL:!MD5;
+          ssl_prefer_server_ciphers on;
+
+          error_page 404 /404.html;
+          location = /404.html {
+              root /usr/share/nginx/html;
+              internal;
+          }
+
+          location / {
+              return 404;
+          }
+      }
+  when: wildcard_cert_post.stat.exists
+
+- name: Enable catch-all (post-certbot)
+  file:
+    src: /etc/nginx/sites-available/000-default-catch-all.conf
+    dest: /etc/nginx/sites-enabled/000-default-catch-all.conf
+    state: link
+  when: wildcard_cert_post.stat.exists
+
+- name: Test nginx config after certbot
+  command: nginx -t
+  changed_when: false
+  when: wildcard_cert_post.stat.exists
+
+- name: Reload nginx (post-certbot)
+  systemd:
+    name: nginx
+    state: reloaded
+  when: wildcard_cert_post.stat.exists
+
+- name: Manual certbot reminder
+  debug:
+    msg:
+      - "Certbot not run (run_certbot: false)."
+      - "To get the wildcard cert, run:"
+      - "  certbot certonly \\"
+      - "    --{{ certbot_dns_plugin }} \\"
+      - "    --{{ certbot_dns_plugin }}-credentials {{ certbot_dns_credentials }} \\"
+      - "    --email {{ certbot_email }} --agree-tos \\"
+      - "    -d {{ wildcard_domain }} -d '*.{{ wildcard_domain }}'"
+      - "Then re-run this playbook."
+  when: not (run_certbot | bool)

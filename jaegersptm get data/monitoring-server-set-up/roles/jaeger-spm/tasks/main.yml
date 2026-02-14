@@ -1,0 +1,73 @@
+---
+- name: Create Jaeger configuration directory
+  file:
+    path: "{{ jaeger_config_dir }}"
+    state: directory
+    mode: '0755'
+
+- name: Deploy Jaeger SPM configuration
+  template:
+    src: config-spm.yaml.j2
+    dest: "{{ jaeger_config_dir }}/config-spm.yaml"
+    mode: '0644'
+
+- name: Deploy Jaeger UI configuration
+  template:
+    src: ui-config.json.j2
+    dest: "{{ jaeger_config_dir }}/ui-config.json"
+    mode: '0644'
+
+- name: Stop existing Jaeger containers
+  docker_container:
+    name: "{{ jaeger_container_name }}"
+    state: absent
+  ignore_errors: true
+
+- name: Pull Jaeger Docker image
+  docker_image:
+    name: "jaegertracing/jaeger:{{ jaeger_version }}"
+    source: pull
+
+- name: Create Docker network if needed
+  docker_network:
+    name: "{{ jaeger_docker_network }}"
+    state: present
+  when: jaeger_docker_network != "host"
+
+- name: Start Jaeger container with SPM
+  docker_container:
+    name: "{{ jaeger_container_name }}"
+    image: "jaegertracing/jaeger:{{ jaeger_version }}"
+    state: started
+    restart_policy: unless-stopped
+    network_mode: "{{ jaeger_docker_network }}"
+    ports: "{{ jaeger_ports }}"
+    volumes:
+      - "{{ jaeger_config_dir }}/config-spm.yaml:/etc/jaeger/config.yaml:ro"
+      - "{{ jaeger_config_dir }}/ui-config.json:/etc/jaeger/ui-config.json:ro"
+    command: "--config=/etc/jaeger/config.yaml"
+
+- name: Wait for Jaeger UI
+  uri:
+    url: "http://localhost:16686"
+    status_code: 200
+  register: result
+  until: result.status == 200
+  retries: 30
+  delay: 2
+
+- name: Wait for metrics endpoint
+  uri:
+    url: "http://localhost:8889/metrics"
+    status_code: 200
+  register: result
+  until: result.status == 200
+  retries: 30
+  delay: 2
+
+- name: Display success message
+  debug:
+    msg:
+      - "Jaeger SPM deployed successfully!"
+      - "Jaeger UI: http://localhost:16686 (check Monitor tab)"
+      - "Metrics: http://localhost:8889/metrics"

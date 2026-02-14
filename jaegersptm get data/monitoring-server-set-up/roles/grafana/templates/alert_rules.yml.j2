@@ -1,0 +1,220 @@
+apiVersion: 1
+
+groups:
+  - name: system_alerts
+    folder: System Monitoring
+    interval: 1m
+    rules:
+
+      # =====================================================
+      # High CPU Usage
+      # =====================================================
+      - uid: high_cpu_usage
+        title: High CPU Usage
+        condition: C
+        data:
+          # A: CPU usage per instance
+          - refId: A
+            datasourceUid: prometheus
+            relativeTimeRange:
+              from: 300
+              to: 0
+            model:
+              expr: |
+                100 - avg by (instance) (
+                  irate(node_cpu_seconds_total{mode="idle"}[5m]) * 100
+                )
+              intervalMs: 1000
+              maxDataPoints: 43200
+
+          # B: Reduce
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+
+          # C: Threshold
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [80]
+                  operator:
+                    type: and
+                  reducer:
+                    type: last
+                  type: query
+
+        for: 5m
+        noDataState: OK
+        execErrState: Alerting
+        labels:
+          severity: warning
+        annotations:
+          summary: High CPU usage
+          description: CPU usage > 80% for 5 minutes
+
+      # =====================================================
+      # High Memory Usage (FIXED METRIC NAME)
+      # =====================================================
+      - uid: high_memory_usage
+        title: High Memory Usage
+        condition: C
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            relativeTimeRange:
+              from: 300
+              to: 0
+            model:
+              expr: |
+                (1 - (
+                  node_memory_MemAvailable_bytes /
+                  node_memory_MemTotal_bytes
+                )) * 100
+              intervalMs: 1000
+              maxDataPoints: 43200
+
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [85]
+                  operator:
+                    type: and
+                  reducer:
+                    type: last
+                  type: query
+
+        for: 5m
+        noDataState: OK
+        execErrState: Alerting
+        labels:
+          severity: warning
+        annotations:
+          summary: High memory usage
+          description: Memory usage > 85% for 5 minutes
+
+      # =====================================================
+      # Low Disk Space
+      # =====================================================
+      - uid: low_disk_space
+        title: Low Disk Space
+        condition: C
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            relativeTimeRange:
+              from: 300
+              to: 0
+            model:
+              expr: |
+                (
+                  node_filesystem_avail_bytes{mountpoint="/",fstype!~"tmpfs|overlay"} /
+                  node_filesystem_size_bytes{mountpoint="/",fstype!~"tmpfs|overlay"}
+                ) * 100
+              intervalMs: 1000
+              maxDataPoints: 43200
+
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: lt
+                    params: [15]
+                  operator:
+                    type: and
+                  reducer:
+                    type: last
+                  type: query
+
+        for: 5m
+        noDataState: OK
+        execErrState: Alerting
+        labels:
+          severity: critical
+        annotations:
+          summary: Low disk space
+          description: Root filesystem < 15% free
+
+      # =====================================================
+      # Node Down
+      # =====================================================
+      # =====================================================
+      # Node Down (robust, no nodata confusion)
+      # =====================================================
+      - uid: node_down
+        title: Node Down
+        condition: C
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            relativeTimeRange:
+              from: 300
+              to: 0
+            model:
+              expr: |
+                up{job=~"node.*"} == 0
+                OR
+                absent(up{job=~"node.*"})
+              intervalMs: 1000
+              maxDataPoints: 43200
+
+          - refId: B
+            datasourceUid: __expr__
+            model:
+              type: reduce
+              expression: A
+              reducer: last
+
+          - refId: C
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: B
+              conditions:
+                - evaluator:
+                    type: gt
+                    params: [0]
+                  operator:
+                    type: and
+                  reducer:
+                    type: last
+                  type: query
+
+        for: 2m
+        noDataState: OK          # 👈 IMPORTANT CHANGE
+        execErrState: Alerting
+        labels:
+          severity: critical
+        annotations:
+          summary: Node down
+          description: Node exporter is not responding
+

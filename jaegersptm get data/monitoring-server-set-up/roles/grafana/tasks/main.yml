@@ -1,0 +1,258 @@
+---
+# =============================
+# Install Dependencies
+# =============================
+- name: Install Grafana dependencies
+  apt:
+    name:
+      - apt-transport-https
+      - software-properties-common
+    state: present
+    update_cache: yes
+
+# =============================
+# Add Grafana Repository
+# =============================
+- name: Create keyrings directory
+  file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: '0755'
+
+- name: Download Grafana GPG key
+  get_url:
+    url: https://apt.grafana.com/gpg.key
+    dest: /etc/apt/keyrings/grafana.asc
+    mode: '0644'
+
+- name: Add Grafana repository
+  apt_repository:
+    repo: "deb [signed-by=/etc/apt/keyrings/grafana.asc] https://apt.grafana.com stable main"
+    state: present
+    filename: grafana
+
+# =============================
+# Install Grafana
+# =============================
+- name: Install Grafana
+  apt:
+    name: grafana
+    state: present
+    update_cache: yes
+
+# =============================
+# Configure Grafana
+# =============================
+- name: Stop Grafana service before configuration
+  systemd:
+    name: grafana-server
+    state: stopped
+
+- name: Backup existing Grafana database
+  copy:
+    src: /var/lib/grafana/grafana.db
+    dest: "/var/lib/grafana/grafana.db.backup-{{ ansible_date_time.iso8601_basic_short }}"
+    remote_src: yes
+    owner: grafana
+    group: grafana
+  ignore_errors: yes
+
+- name: Remove Grafana database for clean provisioning
+  file:
+    path: /var/lib/grafana/grafana.db
+    state: absent
+
+- name: Remove old alerting provisioning files
+  file:
+    path: /etc/grafana/provisioning/alerting
+    state: absent
+
+- name: Configure Grafana (grafana.ini)
+  template:
+    src: grafana.ini.j2
+    dest: /etc/grafana/grafana.ini
+    owner: grafana
+    group: grafana
+    mode: '0644'
+    backup: yes
+
+# =============================
+# Datasources Provisioning
+# =============================
+- name: Create Grafana datasources directory
+  file:
+    path: /etc/grafana/provisioning/datasources
+    state: directory
+    owner: grafana
+    group: grafana
+    mode: '0755'
+
+- name: Deploy Grafana datasources
+  template:
+    src: datasources.yml.j2
+    dest: /etc/grafana/provisioning/datasources/datasources.yml
+    owner: grafana
+    group: grafana
+    mode: '0644'
+  notify: restart grafana
+
+# =============================
+# Dashboard Provisioning
+# =============================
+- name: Create Grafana dashboard directories
+  file:
+    path: "{{ item }}"
+    state: directory
+    owner: grafana
+    group: grafana
+    mode: '0755'
+  loop:
+    - /etc/grafana/provisioning/dashboards
+    - /etc/grafana/provisioning/dashboards-json
+
+- name: Download Node Exporter dashboard
+  get_url:
+    url: https://grafana.com/api/dashboards/1860/revisions/37/download
+    dest: /etc/grafana/provisioning/dashboards-json/node-exporter.json
+    owner: grafana
+    group: grafana
+    mode: '0644'
+
+- name: Download PostgreSQL dashboard
+  get_url:
+    url: https://grafana.com/api/dashboards/9628/revisions/3/download
+    dest: /etc/grafana/provisioning/dashboards-json/postgres.json
+    owner: grafana
+    group: grafana
+    mode: '0644'
+
+- name: Configure Grafana dashboard provisioning
+  template:
+    src: dashboards.yml.j2
+    dest: /etc/grafana/provisioning/dashboards/dashboards.yml
+    owner: grafana
+    group: grafana
+    mode: '0644'
+  notify: restart grafana
+
+# =============================
+# Alerting Provisioning
+# =============================
+- name: Create Grafana alerting provisioning directory
+  file:
+    path: /etc/grafana/provisioning/alerting
+    state: directory
+    owner: grafana
+    group: grafana
+    mode: '0755'
+
+- name: Deploy contact points configuration
+  template:
+    src: contact_points.yml.j2
+    dest: /etc/grafana/provisioning/alerting/contact-points.yml
+    owner: grafana
+    group: grafana
+    mode: '0644'
+  notify: restart grafana
+
+- name: Deploy alert rules
+  template:
+    src: alert_rules.yml.j2
+    dest: /etc/grafana/provisioning/alerting/alert-rules.yml
+    owner: grafana
+    group: grafana
+    mode: '0644'
+  notify: restart grafana
+
+- name: Deploy notification policies
+  template:
+    src: notification_policies.yml.j2
+    dest: /etc/grafana/provisioning/alerting/notification-policies.yml
+    owner: grafana
+    group: grafana
+    mode: '0644'
+  notify: restart grafana
+
+# =============================
+# Firewall (UFW)
+# =============================
+- name: Check if UFW is active
+  command: ufw status
+  register: ufw_status
+  failed_when: false
+  changed_when: false
+
+- name: Allow Grafana port
+  ufw:
+    rule: allow
+    port: "{{ grafana_port }}"
+    proto: tcp
+  when: "'Status: active' in ufw_status.stdout"
+
+# =============================
+# Start Grafana
+# =============================
+- name: Enable and start Grafana service
+  systemd:
+    name: grafana-server
+    state: started
+    enabled: yes
+    daemon_reload: yes
+
+- name: Wait for Grafana to initialize
+  pause:
+    seconds: 10
+
+# =============================
+# Check Service Status
+# =============================
+- name: Check if Grafana is actually running
+  command: systemctl is-active grafana-server
+  register: grafana_active
+  failed_when: false
+  changed_when: false
+
+- name: Display Grafana service state
+  debug:
+    msg: "Grafana service state: {{ grafana_active.stdout }}"
+
+- name: Get Grafana logs if not running
+  command: journalctl -u grafana-server -n 50 --no-pager
+  register: grafana_logs
+  when: grafana_active.stdout != 'active'
+  changed_when: false
+
+- name: Display Grafana logs if service failed
+  debug:
+    var: grafana_logs.stdout_lines
+  when: grafana_active.stdout != 'active'
+
+- name: Fail if Grafana is not running
+  fail:
+    msg: "Grafana service is not running. Check logs above."
+  when: grafana_active.stdout != 'active'
+
+# =============================
+# Verify Startup
+# =============================
+- name: Wait for Grafana API
+  uri:
+    url: "http://localhost:{{ grafana_port }}/api/health"
+    status_code: 200
+    timeout: 10
+  register: grafana_health
+  retries: 12
+  delay: 5
+  until: grafana_health.status == 200
+
+# =============================
+# Final Status
+# =============================
+- name: Display Grafana status
+  debug:
+    msg:
+      - "===================================="
+      - "Grafana is running successfully 🎉"
+      - "URL: http://{{ ansible_facts.default_ipv4.address }}:{{ grafana_port }}"
+      - "Admin user: {{ grafana_admin_user }}"
+      - "===================================="

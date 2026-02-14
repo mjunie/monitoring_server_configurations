@@ -1,0 +1,11 @@
+domains:
+  - book.s32.horizonoes.com
+
+
+backends:
+  book.s32.horizonoes.com: "http://127.0.0.1:800"
+
+
+# Control certbot execution
+run_certbot: false
+certbot_email: junie@ranites.com

@@ -1,0 +1,4 @@
+# Promtail Configuration
+promtail_version: "2.9.3"
+promtail_port: 9080
+loki_port: 3100

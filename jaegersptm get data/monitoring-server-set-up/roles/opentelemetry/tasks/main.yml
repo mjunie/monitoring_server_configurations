@@ -1,0 +1,20 @@
+- name: Download Otel Collector
+  get_url:
+    url: https://github.com/open-telemetry/opentelemetry-collector-releases/releases/download/v{{ otel_version }}/otelcol_{{ otel_version }}_linux_amd64.deb
+    dest: /tmp/otel.deb
+
+- name: Install Otel Collector
+  apt:
+    deb: /tmp/otel.deb
+
+- name: Configure Otel
+  template:
+    src: otel-config.yml.j2
+    dest: /etc/otelcol/config.yaml
+  notify: restart otel
+
+- name: Enable and start Otel
+  systemd:
+    name: otelcol
+    enabled: yes
+    state: started

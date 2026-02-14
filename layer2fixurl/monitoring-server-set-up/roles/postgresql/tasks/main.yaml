@@ -1,0 +1,97 @@
+---
+- name: Install required packages for PostgreSQL repository
+  apt:
+    name:
+      - wget
+      - ca-certificates
+      - gnupg
+    state: present
+    update_cache: yes
+
+- name: Add PostgreSQL GPG key
+  apt_key:
+    url: https://www.postgresql.org/media/keys/ACCC4CF8.asc
+    state: present
+
+- name: Add PostgreSQL repository
+  apt_repository:
+    repo: "deb http://apt.postgresql.org/pub/repos/apt {{ ansible_facts['distribution_release'] }}-pgdg main"
+    state: present
+    filename: pgdg
+
+- name: Install PostgreSQL and dependencies
+  apt:
+    name:
+      - "postgresql-{{ postgres_version }}"
+      - "postgresql-contrib-{{ postgres_version }}"
+      - python3-psycopg2
+    state: present
+    update_cache: yes
+
+- name: Ensure PostgreSQL is started and enabled
+  systemd:
+    name: postgresql
+    state: started
+    enabled: yes
+
+- name: Create PostgreSQL database
+  become: yes
+  become_user: postgres
+  become_method: sudo
+  postgresql_db:
+    name: "{{ postgres_db }}"
+    state: present
+  vars:
+    ansible_ssh_pipelining: true
+
+- name: Create PostgreSQL user
+  become: yes
+  become_user: postgres
+  become_method: sudo
+  postgresql_user:
+    name: "{{ postgres_user }}"
+    password: "{{ postgres_password }}"
+    state: present
+  vars:
+    ansible_ssh_pipelining: true
+
+- name: Grant all privileges on database to user
+  become: yes
+  become_user: postgres
+  become_method: sudo
+  postgresql_privs:
+    database: "{{ postgres_db }}"
+    state: present
+    privs: ALL
+    type: database
+    role: "{{ postgres_user }}"
+  vars:
+    ansible_ssh_pipelining: true
+
+- name: Grant all privileges on schema to user
+  become: yes
+  become_user: postgres
+  become_method: sudo
+  postgresql_privs:
+    database: "{{ postgres_db }}"
+    state: present
+    privs: ALL
+    type: schema
+    objs: public
+    role: "{{ postgres_user }}"
+  vars:
+    ansible_ssh_pipelining: true
+
+- name: Configure PostgreSQL authentication
+  lineinfile:
+    path: "/etc/postgresql/{{ postgres_version }}/main/pg_hba.conf"
+    regexp: '^local\s+all\s+all\s+peer'
+    line: 'local   all             all                                     md5'
+  notify: Restart PostgreSQL
+
+- name: Configure PostgreSQL to listen on specific addresses
+  lineinfile:
+    path: "/etc/postgresql/{{ postgres_version }}/main/postgresql.conf"
+    regexp: '^#?listen_addresses'
+    line: "listen_addresses = '{{ postgres_listen_addresses }}'"
+  notify: Restart PostgreSQL

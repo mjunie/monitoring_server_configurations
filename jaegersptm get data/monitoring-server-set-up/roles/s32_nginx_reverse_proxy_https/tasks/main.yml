@@ -1,0 +1,75 @@
+---
+# Install nginx
+- name: Install nginx
+  apt:
+    name: nginx
+    state: present
+    update_cache: yes
+
+- name: Enable and start nginx
+  systemd:
+    name: nginx
+    state: started
+    enabled: yes
+
+# HTTP reverse proxy
+- name: Deploy HTTP reverse proxy config
+  template:
+    src: reverse-proxy-http.conf.j2
+    dest: /etc/nginx/sites-available/reverse-proxy.conf
+    mode: '0644'
+
+- name: Enable reverse proxy site
+  file:
+    src: /etc/nginx/sites-available/reverse-proxy.conf
+    dest: /etc/nginx/sites-enabled/reverse-proxy.conf
+    state: link
+    force: yes
+
+- name: Remove default nginx site
+  file:
+    path: /etc/nginx/sites-enabled/default
+    state: absent
+
+- name: Test nginx config
+  command: nginx -t
+  changed_when: false
+
+- name: Reload nginx
+  systemd:
+    name: nginx
+    state: reloaded
+
+# Install certbot
+- name: Install certbot
+  apt:
+    name:
+      - certbot
+      - python3-certbot-nginx
+    state: present
+
+# Optional certbot execution
+- name: Run certbot automatically (optional)
+  command: >
+    certbot --nginx
+    --non-interactive
+    --agree-tos
+    --email {{ certbot_email }}
+    {% for domain in domains %}-d {{ domain }} {% endfor %}
+    --redirect
+  when: run_certbot
+  register: certbot_out
+
+- name: Show certbot output
+  debug:
+    var: certbot_out.stdout_lines
+  when: run_certbot
+
+- name: Manual certbot reminder
+  debug:
+    msg:
+      - "Certbot not run automatically."
+      - "Run on this server:"
+      - "certbot --nginx {{ domains | map('regex_replace', '^(.*)$', '-d \\1') | join(' ') }}"
+      - "Choose option 2 (Redirect HTTP to HTTPS)"
+  when: not run_certbot

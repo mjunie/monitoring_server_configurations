@@ -1,0 +1,35 @@
+---
+- name: Run Grafana Debug Script
+  hosts: all
+  become: yes
+  gather_facts: yes
+
+  tasks:
+    - name: Copy debug script to server
+      copy:
+        src: debug_grafana_alerts.sh
+        dest: /tmp/debug_grafana_alerts.sh
+        mode: '0755'
+
+    - name: Execute debug script
+      shell: /tmp/debug_grafana_alerts.sh
+      register: debug_output
+      environment:
+        GRAFANA_PORT: "{{ grafana_port | default('3000') }}"
+        GRAFANA_USER: "{{ grafana_admin_user | default('admin') }}"
+        GRAFANA_PASS: "{{ grafana_admin_password | default('admin') }}"
+
+    - name: Display debug output
+      debug:
+        var: debug_output.stdout_lines
+
+    - name: Save debug output to file
+      copy:
+        content: "{{ debug_output.stdout }}"
+        dest: /tmp/grafana_debug_output.txt
+
+    - name: Fetch debug output to local machine
+      fetch:
+        src: /tmp/grafana_debug_output.txt
+        dest: ./grafana_debug_output.txt
+        flat: yes

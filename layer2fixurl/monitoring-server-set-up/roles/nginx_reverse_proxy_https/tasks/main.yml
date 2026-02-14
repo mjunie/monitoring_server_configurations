@@ -1,0 +1,169 @@
+---
+# Install nginx and openssl
+- name: Install nginx and openssl
+  apt:
+    name:
+      - nginx
+      - openssl
+    state: present
+    update_cache: yes
+
+- name: Enable and start nginx
+  systemd:
+    name: nginx
+    state: started
+    enabled: yes
+
+# Create SSL directory for default certificates
+- name: Create SSL directory
+  file:
+    path: /etc/nginx/ssl
+    state: directory
+    mode: '0755'
+
+# Generate self-signed certificate for default server (catches invalid domains)
+- name: Check if default SSL certificate exists
+  stat:
+    path: /etc/nginx/ssl/default-cert.pem
+  register: default_cert
+
+- name: Generate self-signed SSL certificate for default server
+  command: >
+    openssl req -x509 -nodes -days 365 -newkey rsa:2048
+    -keyout /etc/nginx/ssl/default-key.pem
+    -out /etc/nginx/ssl/default-cert.pem
+    -subj "/C=US/ST=State/L=City/O=Organization/CN=_"
+  when: not default_cert.stat.exists
+
+# Deploy custom error pages
+- name: Deploy custom 404 page
+  copy:
+    src: 404.html
+    dest: /usr/share/nginx/html/404.html
+    mode: '0644'
+
+# HTTP reverse proxy - Deploy the template
+- name: Deploy HTTP reverse proxy config
+  template:
+    src: reverse-proxy-http.conf.j2
+    dest: /etc/nginx/sites-available/reverse-proxy.conf
+    mode: '0644'
+
+- name: Enable reverse proxy site
+  file:
+    src: /etc/nginx/sites-available/reverse-proxy.conf
+    dest: /etc/nginx/sites-enabled/reverse-proxy.conf
+    state: link
+    force: yes
+
+- name: Remove default nginx site
+  file:
+    path: /etc/nginx/sites-enabled/default
+    state: absent
+
+# CRITICAL: Deploy catch-all server BEFORE certbot and ALWAYS (not conditional on run_certbot)
+# The HTTP catch-all serves the custom 404 page.
+# The HTTPS catch-all uses `ssl_reject_handshake on` (nginx >= 1.19.4) so the browser
+# never receives a mismatched certificate — it gets a clean TLS handshake failure
+# instead of a "Potential Security Risk" page, which is far less alarming.
+- name: Deploy default catch-all server configuration
+  copy:
+    dest: /etc/nginx/sites-available/000-default-catch-all.conf
+    mode: '0644'
+    content: |
+      # Default server block for HTTP - catches all undefined domains/URLs
+      server {
+          listen 80 default_server;
+          listen [::]:80 default_server;
+          server_name _;
+
+          # Custom 404 page
+          error_page 404 /404.html;
+          location = /404.html {
+              root /usr/share/nginx/html;
+              internal;
+          }
+
+          # Return 404 for all requests to undefined domains
+          location / {
+              return 404;
+          }
+      }
+
+      # Default server block for HTTPS - rejects the TLS handshake cleanly
+      # for undefined domains. This prevents the "Potential Security Risk"
+      # browser warning caused by presenting a self-signed cert with a
+      # mismatched CN. Requires nginx >= 1.19.4.
+      server {
+          listen 443 ssl default_server;
+          listen [::]:443 ssl default_server;
+          server_name _;
+
+          # Reject TLS handshake immediately for unknown domains.
+          # The browser will show a plain "connection refused / reset" rather
+          # than a scary certificate warning page.
+          ssl_reject_handshake on;
+      }
+
+- name: Enable default catch-all configuration
+  file:
+    src: /etc/nginx/sites-available/000-default-catch-all.conf
+    dest: /etc/nginx/sites-enabled/000-default-catch-all.conf
+    state: link
+    force: yes
+
+- name: Test nginx config before certbot
+  command: nginx -t
+  changed_when: false
+
+- name: Reload nginx
+  systemd:
+    name: nginx
+    state: reloaded
+
+# Install certbot
+- name: Install certbot
+  apt:
+    name:
+      - certbot
+      - python3-certbot-nginx
+    state: present
+
+# Optional certbot execution
+- name: Run certbot automatically (optional)
+  command: >
+    certbot --nginx
+    --non-interactive
+    --agree-tos
+    --email {{ certbot_email }}
+    {% for domain in domains %}-d {{ domain }} {% endfor %}
+    --redirect
+  when: run_certbot | bool
+  register: certbot_out
+
+- name: Show certbot output
+  debug:
+    var: certbot_out.stdout_lines
+  when: run_certbot | bool
+
+- name: Test nginx config after certbot
+  command: nginx -t
+  changed_when: false
+  when: run_certbot | bool
+
+- name: Reload nginx after certbot
+  systemd:
+    name: nginx
+    state: reloaded
+  when: run_certbot | bool
+
+- name: Manual certbot reminder
+  debug:
+    msg:
+      - "Certbot not run automatically."
+      - "Run on this server:"
+      - "certbot --nginx {% for domain in domains %}-d {{ domain }} {% endfor %}"
+      - "Choose option 2 (Redirect HTTP to HTTPS)"
+      - ""
+      - "The catch-all server is already deployed and active."
+  when: not (run_certbot | bool)

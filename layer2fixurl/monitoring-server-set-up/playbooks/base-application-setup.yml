@@ -1,0 +1,16 @@
+# playbooks/setup_server.yml
+---
+- name: Setup Ubuntu Server Infrastructure
+  hosts: all
+  become: yes
+  remote_user: admin  # Now using admin user
+
+  
+  roles:
+    # - docker
+    # - postgresql
+    # - node_exporter
+    # - promtail
+    - nginx_reverse_proxy_https
+    # - s32_nginx_reverse_proxy_https
+    

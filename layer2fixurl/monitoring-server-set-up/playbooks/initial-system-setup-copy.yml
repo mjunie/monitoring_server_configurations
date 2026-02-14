@@ -1,0 +1,341 @@
+---
+- name: Complete Ubuntu Server Security and Configuration - Part 1 (Create Users)
+  hosts: all
+  become: yes
+  vars:
+    # User Configuration
+    admin_username: admin
+    admin_password: "admin"  # Change this! Will be hashed automatically
+    admin_ssh_key: ""  # Add your public SSH key here
+    
+    # Additional user configuration
+    ranites_username: ranitesuser
+    ranites_password: "qwerty123"  # Change this!
+    ranites_ssh_key: ""  # Add SSH key if needed
+    ranites_has_sudo: yes  # Set to 'no' if user shouldn't have sudo access
+
+  tasks:
+    # CREATE NON-ROOT USERS FIRST
+    - name: Create admin user
+      user:
+        name: "{{ admin_username }}"
+        password: "{{ admin_password }}"
+        shell: /bin/bash
+        groups: sudo
+        append: yes
+        create_home: yes
+        state: present
+
+    - name: Create .ssh directory for admin user
+      file:
+        path: "/home/{{ admin_username }}/.ssh"
+        state: directory
+        owner: "{{ admin_username }}"
+        group: "{{ admin_username }}"
+        mode: '0700'
+
+    - name: Add SSH public key for admin user
+      authorized_key:
+        user: "{{ admin_username }}"
+        key: "{{ admin_ssh_key }}"
+        state: present
+      when: admin_ssh_key != ""
+
+    - name: Allow admin user to sudo without password
+      lineinfile:
+        path: /etc/sudoers.d/admin
+        line: "{{ admin_username }} ALL=(ALL) NOPASSWD:ALL"
+        create: yes
+        validate: 'visudo -cf %s'
+        mode: '0440'
+
+    - name: Create ranitesuser
+      user:
+        name: "{{ ranites_username }}"
+        password: "{{ ranites_password }}"
+        shell: /bin/bash
+        groups: "{{ 'sudo' if ranites_has_sudo else '' }}"
+        append: yes
+        create_home: yes
+        state: present
+
+    - name: Create .ssh directory for ranitesuser
+      file:
+        path: "/home/{{ ranites_username }}/.ssh"
+        state: directory
+        owner: "{{ ranites_username }}"
+        group: "{{ ranites_username }}"
+        mode: '0700'
+
+    - name: Add SSH public key for ranitesuser
+      authorized_key:
+        user: "{{ ranites_username }}"
+        key: "{{ ranites_ssh_key }}"
+        state: present
+      when: ranites_ssh_key != ""
+
+    - name: Allow ranitesuser to sudo without password
+      lineinfile:
+        path: /etc/sudoers.d/ranitesuser
+        line: "{{ ranites_username }} ALL=(ALL) NOPASSWD:ALL"
+        create: yes
+        validate: 'visudo -cf %s'
+        mode: '0440'
+      when: ranites_has_sudo
+
+- name: Complete Ubuntu Server Security and Configuration - Part 2 (System Config)
+  hosts: all
+  become: yes
+  remote_user: admin  # Now using admin user
+  vars:
+    # SSH Configuration
+    ssh_port: 426  # Change from default 22
+    
+    # Firewall Allowed Ports
+    ufw_allowed_ports:
+      - "{{ ssh_port }}/tcp"  # SSH
+      - "80/tcp"              # HTTP
+      - "443/tcp"             # HTTPS
+      - "3000/tcp"            # Grafana
+      - "9090/tcp"            # Prometheus (if needed)
+      - "3100/tcp"            # Loki (if needed)
+      - "9100/tcp"            # Node Exporter (if needed)
+      - "16686/tcp"            # jaeger
+
+    
+    # Basic packages to install
+    basic_packages:
+      - curl
+      - wget
+      - git
+      - vim
+      - htop
+      - net-tools
+      - unattended-upgrades
+      - apt-listchanges
+      - unzip
+      - tar
+      - gzip
+    
+    # Fail2Ban Configuration
+    fail2ban_bantime: 3600
+    fail2ban_findtime: 600
+    fail2ban_maxretry: 5
+
+  tasks:
+    # SYSTEM UPDATE AND UPGRADE
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    # - name: Upgrade all packages to latest version
+    #   apt:
+    #     upgrade: dist
+    #     autoremove: yes
+    #     autoclean: yes
+
+    # INSTALL BASIC COMMANDS
+    - name: Check if curl is installed
+      command: which curl
+      register: curl_check
+      failed_when: false
+      changed_when: false
+
+    - name: Check if wget is installed
+      command: which wget
+      register: wget_check
+      failed_when: false
+      changed_when: false
+
+    - name: Check if git is installed
+      command: which git
+      register: git_check
+      failed_when: false
+      changed_when: false
+
+    - name: Install basic packages
+      apt:
+        name: "{{ basic_packages }}"
+        state: present
+
+    - name: Display installation results
+      debug:
+        msg: 
+          - "curl: {{ 'already installed' if curl_check.rc == 0 else 'newly installed' }}"
+          - "wget: {{ 'already installed' if wget_check.rc == 0 else 'newly installed' }}"
+          - "git: {{ 'already installed' if git_check.rc == 0 else 'newly installed' }}"
+
+
+    # SSH SECURITY CONFIGURATION
+    - name: Backup original sshd_config
+      copy:
+        src: /etc/ssh/sshd_config
+        dest: /etc/ssh/sshd_config.backup
+        remote_src: yes
+        force: no
+
+    - name: Configure SSH - Change port
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^#?Port'
+        line: "Port {{ ssh_port }}"
+        state: present
+
+
+
+    - name: Restart SSH service
+      systemd:
+        name: ssh
+        state: restarted
+        enabled: yes
+
+    # UFW FIREWALL CONFIGURATION
+    - name: Install UFW
+      apt:
+        name: ufw
+        state: present
+
+    - name: Reset UFW to default
+      ufw:
+        state: reset
+
+    - name: Set UFW default policies
+      ufw:
+        direction: "{{ item.direction }}"
+        policy: "{{ item.policy }}"
+      loop:
+        - { direction: 'incoming', policy: 'deny' }
+        - { direction: 'outgoing', policy: 'allow' }
+
+    - name: Allow specified ports through UFW
+      ufw:
+        rule: allow
+        port: "{{ item.split('/')[0] }}"
+        proto: "{{ item.split('/')[1] }}"
+      loop: "{{ ufw_allowed_ports }}"
+
+    - name: Enable UFW
+      ufw:
+        state: enabled
+
+    - name: Enable UFW service on boot
+      systemd:
+        name: ufw
+        enabled: yes
+
+    # FAIL2BAN CONFIGURATION
+    - name: Install Fail2Ban
+      apt:
+        name: fail2ban
+        state: present
+
+    - name: Create Fail2Ban local jail configuration
+      copy:
+        dest: /etc/fail2ban/jail.local
+        content: |
+          [DEFAULT]
+          bantime = {{ fail2ban_bantime }}
+          findtime = {{ fail2ban_findtime }}
+          maxretry = {{ fail2ban_maxretry }}
+          destemail = root@localhost
+          sendername = Fail2Ban
+          action = %(action_mwl)s
+
+          [sshd]
+          enabled = true
+          port = {{ ssh_port }}
+          filter = sshd
+          logpath = /var/log/auth.log
+          maxretry = {{ fail2ban_maxretry }}
+        mode: '0644'
+
+    - name: Start and enable Fail2Ban
+      systemd:
+        name: fail2ban
+        state: restarted
+        enabled: yes
+
+    # AUTOMATIC SECURITY UPDATES
+    - name: Configure unattended-upgrades
+      copy:
+        dest: /etc/apt/apt.conf.d/50unattended-upgrades
+        content: |
+          Unattended-Upgrade::Allowed-Origins {
+              "${distro_id}:${distro_codename}";
+              "${distro_id}:${distro_codename}-security";
+              "${distro_id}ESMApps:${distro_codename}-apps-security";
+              "${distro_id}ESM:${distro_codename}-infra-security";
+          };
+          Unattended-Upgrade::AutoFixInterruptedDpkg "true";
+          Unattended-Upgrade::MinimalSteps "true";
+          Unattended-Upgrade::Remove-Unused-Kernel-Packages "true";
+          Unattended-Upgrade::Remove-Unused-Dependencies "true";
+          Unattended-Upgrade::Automatic-Reboot "false";
+        mode: '0644'
+
+    - name: Enable automatic updates
+      copy:
+        dest: /etc/apt/apt.conf.d/20auto-upgrades
+        content: |
+          APT::Periodic::Update-Package-Lists "1";
+          APT::Periodic::Download-Upgradeable-Packages "1";
+          APT::Periodic::AutocleanInterval "7";
+          APT::Periodic::Unattended-Upgrade "1";
+        mode: '0644'
+
+    # BACKUP CONFIGURATION
+    - name: Create backup directory
+      file:
+        path: /var/backups/server
+        state: directory
+        mode: '0700'
+
+    - name: Create backup script
+      copy:
+        dest: /usr/local/bin/backup.sh
+        content: |
+          #!/bin/bash
+          # Simple backup script
+          BACKUP_DIR="/var/backups/server"
+          DATE=$(date +%Y%m%d_%H%M%S)
+          
+          # Backup important directories
+          tar -czf "$BACKUP_DIR/etc_backup_$DATE.tar.gz" /etc 2>/dev/null
+          tar -czf "$BACKUP_DIR/home_backup_$DATE.tar.gz" /home 2>/dev/null
+          
+          # Keep only last 7 days of backups
+          find "$BACKUP_DIR" -name "*.tar.gz" -type f -mtime +7 -delete
+          
+          echo "Backup completed: $DATE"
+        mode: '0755'
+
+    - name: Create daily backup cron job
+      cron:
+        name: "Daily system backup"
+        minute: "0"
+        hour: "2"
+        job: "/usr/local/bin/backup.sh >> /var/log/backup.log 2>&1"
+        user: root
+
+    # FINAL STATUS REPORT
+    - name: Display configuration summary
+      debug:
+        msg:
+          - "========================================="
+          - "Server Configuration Complete!"
+          - "========================================="
+          - "Admin User: admin"
+          - "Ranites User: ranitesuser"
+          - "SSH Port: {{ ssh_port }}"
+          - "UFW Status: Enabled"
+          - "Fail2Ban Status: Enabled"
+          - "Automatic Updates: Enabled"
+          - "Daily Backups: Enabled (2:00 AM)"
+          - "========================================="
+          - "All tasks executed by: admin user"
+          - "========================================="
+          - "IMPORTANT: Test SSH access before closing"
+          - "current session! Use: ssh -p {{ ssh_port }} admin@server_ip"
+          - "or: ssh -p {{ ssh_port }} ranitesuser@server_ip"
+          - "========================================="
